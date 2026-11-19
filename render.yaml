@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: propertyiq-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: qwen/qwen3-4b:free
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: CORS_ORIGINS
+        sync: false
+      - key: DATA_DIR
+        value: /tmp/propertyiq-data
+  - type: web
+    name: propertyiq
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
