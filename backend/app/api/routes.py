@@ -27,6 +27,19 @@ def is_greeting(message: str) -> bool:
     return normalized in GREETING_MESSAGES
 
 
+def asks_for_current_property_data(message: str) -> bool:
+    normalized = message.casefold()
+    phrases = (
+        "darglobal", "dar global", "wasalt", "latest project", "latest development",
+        "publicly listed", "currently available", "properties in ", "property in ",
+        "listings in ", "available in ", "compare ", "amenities for", "property price",
+        "project price", "price of ", "rent for ", "for sale in ", "for rent in ",
+        "bedroom", "built-up area", "square meter", "sqm", "riyadh", "jeddah",
+        "makkah", "saudi property", "saudi arabia property",
+    )
+    return any(phrase in normalized for phrase in phrases)
+
+
 def verify_admin(x_admin_token: str | None) -> None:
     if settings.admin_token and x_admin_token != settings.admin_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin token required")
@@ -44,7 +57,7 @@ def api_status():
     return {
         "backend": "ok",
         "knowledge_base": "ready" if documents else "empty",
-        "ai_model_configured": bool(settings.openrouter_api_key),
+        "ai_model_configured": bool(settings.gemini_api_key or settings.openrouter_api_key),
         "document_count": len(documents),
         "source_websites": indexed_websites(documents),
     }
@@ -92,32 +105,31 @@ async def chat(request: ChatRequest):
         websites = indexed_websites(documents)
         if asks_darglobal and not any("darglobal" in name.casefold().replace(" ", "") for name in websites):
             answer = (
-                "I don't have verified DarGlobal pages in the indexed sources. The public DarGlobal site "
-                "was not crawlable during the last scrape, so I can't confirm its latest projects without "
-                "a source. The current knowledge base includes: "
+                "I don't have verified DarGlobal pages in the indexed sources, so I can't confirm its latest "
+                "projects without a source. The current knowledge base includes: "
                 f"{', '.join(websites) if websites else 'no sources yet'}."
             )
-        elif not documents:
-            answer = "The knowledge base is empty, so I don't have verified public property information to answer this yet."
-        else:
+            return ChatResponse(answer=answer, sources=[], fallback=True)
+        if asks_for_current_property_data(request.message):
             answer = (
-                "I couldn't find that detail in the currently indexed public pages. "
-                f"Indexed sources: {', '.join(websites)}. Try asking about a specific listed property's location, price, size, or features."
+                "I couldn't find a matching verified listing or project in the indexed sources, "
+                "so I can't confirm current property details. "
+                f"Indexed sources: {', '.join(websites) if websites else 'none'}."
             )
-        return ChatResponse(
-            answer=answer,
-            sources=[],
-            fallback=True,
-        )
+            return ChatResponse(answer=answer, sources=[], fallback=True)
     try:
         answer, model = await generate_answer(
-            settings.openrouter_api_key,
-            settings.model_list,
-            settings.openrouter_base_url,
-            settings.openrouter_timeout,
             request.message,
             request.history,
             relevant,
+            preferred_provider=settings.provider_list[0],
+            gemini_api_key=settings.gemini_api_key,
+            gemini_models=settings.gemini_model_list,
+            gemini_base_url=settings.gemini_base_url,
+            openrouter_api_key=settings.openrouter_api_key,
+            openrouter_models=settings.model_list,
+            openrouter_base_url=settings.openrouter_base_url,
+            timeout=settings.openrouter_timeout,
         )
     except OpenRouterError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))

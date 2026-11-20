@@ -11,6 +11,14 @@ services:
         value: nvidia/nemotron-3.5-lightning:free
       - key: OPENROUTER_FALLBACK_MODELS
         value: nvidia/nemotron-3-ultra-550b-a55b:free,google/gemma-4-31b-it:free
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-4-hydrogen
+      - key: GEMINI_FALLBACK_MODELS
+        value: gemini-3.5-flash-lite
+      - key: AI_PROVIDER
+        value: gemini
       - key: ADMIN_TOKEN
         generateValue: true
       - key: CORS_ORIGINS

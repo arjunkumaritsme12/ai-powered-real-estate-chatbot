@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 import types
@@ -8,6 +9,7 @@ from app.rag.chunker import chunk_documents
 from app.api import routes
 from app.scrapers.base import BaseScraper
 from app.rag.store import KnowledgeStore
+from app.services import openrouter as ai_service
 
 
 client = TestClient(app)
@@ -49,6 +51,20 @@ def test_darglobal_query_does_not_use_wasalt_documents(monkeypatch):
     assert "DarGlobal" in response.json()["answer"]
     assert "Wasalt" in response.json()["answer"]
     assert response.json()["sources"] == []
+
+
+def test_general_question_uses_ai_without_retrieved_sources(monkeypatch):
+    async def answer(message, history, context, **kwargs):
+        assert context == []
+        return "A mortgage is a loan used to buy property.", "gemini-4-hydrogen"
+
+    monkeypatch.setattr(routes.store, "search", lambda *args, **kwargs: [])
+    monkeypatch.setattr(routes.store, "load_documents", lambda: [])
+    monkeypatch.setattr(routes, "generate_answer", answer)
+    response = client.post("/api/chat", json={"message": "What is a mortgage?", "history": []})
+    assert response.status_code == 200
+    assert response.json()["answer"].startswith("A mortgage")
+    assert response.json()["model"] == "gemini-4-hydrogen"
 
 
 def test_chat_validation():
@@ -145,6 +161,93 @@ def test_saving_updated_documents_invalidates_stale_index(tmp_path):
     assert not store.index_path.exists()
     assert not store.metadata_path.exists()
     assert store._index_loaded is False
+
+
+def test_gemini_is_preferred_when_configured(monkeypatch):
+    requests = []
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Helpful Gemini answer."}}]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers, json):
+            requests.append((url, headers, json))
+            return Response()
+
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", lambda **kwargs: Client())
+    answer, model = asyncio.run(ai_service.generate_answer(
+        "Hello",
+        [],
+        [],
+        preferred_provider="gemini",
+        gemini_api_key="gemini-test-key",
+        gemini_models=["gemini-4-hydrogen"],
+        gemini_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        openrouter_api_key="openrouter-test-key",
+        openrouter_models=["test/openrouter-model"],
+        openrouter_base_url="https://openrouter.ai/api/v1",
+        timeout=5,
+    ))
+
+    assert answer == "Helpful Gemini answer."
+    assert model == "gemini-4-hydrogen"
+    assert len(requests) == 1
+    assert requests[0][0].startswith("https://generativelanguage.googleapis.com/")
+    assert requests[0][2]["reasoning_effort"] == "low"
+
+
+def test_openrouter_is_used_if_gemini_fails(monkeypatch):
+    requests = []
+
+    class Response:
+        def __init__(self, status_code):
+            self.status_code = status_code
+            self.text = "Gemini unavailable" if status_code != 200 else ""
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OpenRouter fallback answer."}}]}
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, url, headers, json):
+            requests.append(url)
+            return Response(503 if "generativelanguage.googleapis.com" in url else 200)
+
+    monkeypatch.setattr(ai_service.httpx, "AsyncClient", lambda **kwargs: Client())
+    answer, model = asyncio.run(ai_service.generate_answer(
+        "Hello",
+        [],
+        [],
+        preferred_provider="gemini",
+        gemini_api_key="gemini-test-key",
+        gemini_models=["gemini-4-hydrogen"],
+        gemini_base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+        openrouter_api_key="openrouter-test-key",
+        openrouter_models=["test/openrouter-model"],
+        openrouter_base_url="https://openrouter.ai/api/v1",
+        timeout=5,
+    ))
+
+    assert answer == "OpenRouter fallback answer."
+    assert model == "test/openrouter-model"
+    assert len(requests) == 2
+    assert "generativelanguage.googleapis.com" in requests[0]
+    assert "openrouter.ai" in requests[1]
 
 
 def test_no_relevant_document_fallback(monkeypatch):

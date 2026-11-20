@@ -6,7 +6,7 @@ PropertyIQ is a grounded real-estate RAG chatbot that answers questions using pu
 
 - Public website scraping with robots.txt checks, rate limiting, retries, cleaning and deduplication
 - FAISS vector retrieval with Sentence Transformers
-- Grounded OpenRouter chat completions with model fallback
+- Gemini-first chat generation with OpenRouter fallback
 - Source citations and relevance scores
 - Browser-persisted conversation history with thread switching and deletion
 - Responsive React, TypeScript and Tailwind-inspired luxury interface
@@ -19,7 +19,8 @@ PropertyIQ is a grounded real-estate RAG chatbot that answers questions using pu
 flowchart LR
   U[React UI] -->|Chat request| F[FastAPI]
   F -->|Semantic search| V[(FAISS)]
-  F -->|Context| O[OpenRouter]
+  F -->|Grounded context| G[Gemini 4 Hydrogen]
+  G -. fallback .-> O[OpenRouter]
   S[DarGlobal / Wasalt scrapers] --> J[Structured JSON]
   J --> C[Chunking & embeddings]
   C --> V
@@ -80,13 +81,17 @@ curl.exe -X POST "http://localhost:8000/api/knowledge/rebuild" -H "X-Admin-Token
 | OPENROUTER_API_KEY | Server-side OpenRouter credential |
 | OPENROUTER_MODEL | Preferred free model |
 | OPENROUTER_FALLBACK_MODELS | Comma-separated model fallbacks |
+| GEMINI_API_KEY | Optional Google AI Studio key; Gemini is preferred when configured |
+| GEMINI_MODEL | Primary Gemini model (default `gemini-4-hydrogen`) |
+| GEMINI_FALLBACK_MODELS | Gemini fallback models (default `gemini-3.5-flash-lite`) |
+| AI_PROVIDER | Preferred provider, `gemini` or `openrouter`; the other is used as fallback |
 | OPENROUTER_TIMEOUT | Request timeout in seconds |
 | ADMIN_TOKEN | Optional protection for scrape/rebuild endpoints |
 | CORS_ORIGINS | Comma-separated allowed frontend origins |
 | API_BASE_URL | Optional frontend API base URL, including `/api`; leave empty to use the local reverse proxy |
 | DATA_DIR | Scraped JSON and FAISS storage directory |
 
-Never commit `.env` or expose the API key to frontend code.
+Gemini keys can be created in [Google AI Studio](https://aistudio.google.com/apikey). Keep both provider keys on the backend, never in frontend code. If Gemini is configured, it is tried first; OpenRouter is used if Gemini fails. The default Gemini model is `gemini-4-hydrogen`; `gemini-3.5-flash-lite` is the fallback. General questions can be answered without retrieved pages, while current property listings, prices, and availability remain grounded in indexed sources. Model availability, quotas, and pricing depend on the Google AI Studio project and can change.
 
 ## API
 
