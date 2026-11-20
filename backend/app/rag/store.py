@@ -1,7 +1,12 @@
 import json
+import logging
+import threading
 from pathlib import Path
 from app.rag.chunker import Chunk, chunk_documents
 from app.utils.text import deduplicate_documents
+
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeStore:
@@ -15,6 +20,8 @@ class KnowledgeStore:
         self.model = None
         self.index = None
         self.chunks: list[Chunk] = []
+        self._index_loaded = False
+        self._load_lock = threading.RLock()
 
     def load_documents(self) -> list[dict]:
         if not self.documents_path.exists():
@@ -24,8 +31,16 @@ class KnowledgeStore:
 
     def save_documents(self, documents: list[dict]) -> list[dict]:
         documents = deduplicate_documents(documents)
+        if self.documents_path.exists() and self.load_documents() == documents:
+            return documents
         with self.documents_path.open("w", encoding="utf-8") as handle:
             json.dump(documents, handle, ensure_ascii=False, indent=2)
+        with self._load_lock:
+            self.index = None
+            self.chunks = []
+            self._index_loaded = False
+            self.index_path.unlink(missing_ok=True)
+            self.metadata_path.unlink(missing_ok=True)
         return documents
 
     def rebuild(self) -> int:
@@ -39,37 +54,59 @@ class KnowledgeStore:
         documents = self.load_documents()
         raw_chunks = chunk_documents(documents)
         if not raw_chunks:
-            self.chunks = []
-            self.index = None
-            self.metadata_path.unlink(missing_ok=True)
+            with self._load_lock:
+                self.chunks = []
+                self.index = None
+                self._index_loaded = True
+                self.index_path.unlink(missing_ok=True)
+                self.metadata_path.unlink(missing_ok=True)
             return 0
-        self.model = SentenceTransformer(self.embedding_model_name)
-        embeddings = self.model.encode([chunk.text for chunk in raw_chunks], normalize_embeddings=True)
-        dimension = embeddings.shape[1]
-        self.index = faiss.IndexFlatIP(dimension)
-        self.index.add(np.asarray(embeddings, dtype="float32"))
-        faiss.write_index(self.index, str(self.index_path))
-        self.chunks = raw_chunks
-        with self.metadata_path.open("w", encoding="utf-8") as handle:
-            json.dump([{"text": c.text, "metadata": c.metadata} for c in raw_chunks], handle, ensure_ascii=False, indent=2)
+        with self._load_lock:
+            model = self._get_model(SentenceTransformer)
+            embeddings = model.encode([chunk.text for chunk in raw_chunks], normalize_embeddings=True)
+            dimension = embeddings.shape[1]
+            index = faiss.IndexFlatIP(dimension)
+            index.add(np.asarray(embeddings, dtype="float32"))
+            faiss.write_index(index, str(self.index_path))
+            with self.metadata_path.open("w", encoding="utf-8") as handle:
+                json.dump([{"text": c.text, "metadata": c.metadata} for c in raw_chunks], handle, ensure_ascii=False, indent=2)
+            self.index = index
+            self.chunks = raw_chunks
+            self._index_loaded = True
         return len(raw_chunks)
 
+    def _get_model(self, model_class):
+        if self.model is None:
+            self.model = model_class(self.embedding_model_name)
+        return self.model
+
     def load_index(self) -> bool:
-        if not self.index_path.exists() or not self.metadata_path.exists():
-            return False
-        try:
-            import faiss
-            from sentence_transformers import SentenceTransformer
-            self.index = faiss.read_index(str(self.index_path))
-            self.model = SentenceTransformer(self.embedding_model_name)
-            with self.metadata_path.open("r", encoding="utf-8") as handle:
-                rows = json.load(handle)
-            self.chunks = [Chunk(row["text"], row["metadata"]) for row in rows]
-            return True
-        except Exception:
-            self.index = None
-            self.chunks = []
-            return False
+        with self._load_lock:
+            if self._index_loaded:
+                return self.index is not None
+            self._index_loaded = True
+            if not self.index_path.exists() or not self.metadata_path.exists():
+                logger.warning("FAISS index or chunk metadata is missing in %s", self.data_dir)
+                return False
+            try:
+                import faiss
+                from sentence_transformers import SentenceTransformer
+                index = faiss.read_index(str(self.index_path))
+                with self.metadata_path.open("r", encoding="utf-8") as handle:
+                    rows = json.load(handle)
+                model = self._get_model(SentenceTransformer)
+                chunks = [Chunk(row["text"], row["metadata"]) for row in rows]
+                if index.ntotal != len(chunks):
+                    raise ValueError(f"FAISS index has {index.ntotal} vectors but metadata has {len(chunks)} chunks")
+                self.index = index
+                self.chunks = chunks
+                return True
+            except Exception:
+                self.index = None
+                self.chunks = []
+                self._index_loaded = False
+                logger.exception("Could not load FAISS knowledge index from %s", self.data_dir)
+                raise
 
     def search(self, query: str, k: int = 5) -> list[dict]:
         if not self.load_index():

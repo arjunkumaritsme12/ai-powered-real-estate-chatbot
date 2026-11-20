@@ -1,0 +1,1 @@
+window.PROPERTYIQ_API_URL = window.PROPERTYIQ_API_URL || "";

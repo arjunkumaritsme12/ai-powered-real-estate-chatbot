@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Header, HTTPException, status
+from starlette.concurrency import run_in_threadpool
 from app.config import get_settings
 from app.models.schemas import ChatRequest, ChatResponse, HealthResponse, StatusResponse, SourceInfo, Source
 from app.rag.store import KnowledgeStore
@@ -75,7 +76,7 @@ async def chat(request: ChatRequest):
             answer = "Hi! The knowledge base is empty at the moment, so I cannot verify property details yet."
         return ChatResponse(answer=answer, fallback=True)
 
-    retrieved = store.search(request.message, k=5)
+    retrieved = await run_in_threadpool(store.search, request.message, k=5)
     relevant = [item for item in retrieved if float(item.get("relevance", 0)) >= 0.25]
     normalized_query = request.message.casefold().replace(" ", "").replace("-", "")
     asks_darglobal = "darglobal" in normalized_query

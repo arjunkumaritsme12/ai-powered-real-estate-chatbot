@@ -1,9 +1,13 @@
+import json
+import sys
+import types
 from fastapi.testclient import TestClient
 from app.main import app
 from app.utils.text import clean_html, deduplicate_documents
 from app.rag.chunker import chunk_documents
 from app.api import routes
 from app.scrapers.base import BaseScraper
+from app.rag.store import KnowledgeStore
 
 
 client = TestClient(app)
@@ -93,6 +97,54 @@ def test_chunking():
     chunks = chunk_documents([{"text": "a " * 1200, "title": "Test", "url": "https://example.com"}])
     assert len(chunks) >= 2
     assert all(chunk.metadata["title"] == "Test" for chunk in chunks)
+
+
+def test_knowledge_index_load_is_cached(tmp_path, monkeypatch):
+    class FakeIndex:
+        ntotal = 1
+
+        def search(self, embeddings, k):
+            import numpy as np
+            return np.array([[0.9]], dtype="float32"), np.array([[0]], dtype="int64")
+
+    class FakeSentenceTransformer:
+        constructions = 0
+
+        def __init__(self, model_name):
+            type(self).constructions += 1
+
+        def encode(self, texts, normalize_embeddings):
+            import numpy as np
+            return np.array([[1.0, 0.0]], dtype="float32")
+
+    fake_faiss = types.SimpleNamespace(read_index=lambda path: FakeIndex())
+    fake_transformers = types.SimpleNamespace(SentenceTransformer=FakeSentenceTransformer)
+    monkeypatch.setitem(sys.modules, "faiss", fake_faiss)
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_transformers)
+
+    store = KnowledgeStore(str(tmp_path))
+    store.index_path.touch()
+    store.metadata_path.write_text(json.dumps([{
+        "text": "A test property",
+        "metadata": {"title": "Test", "url": "https://example.com"},
+    }]), encoding="utf-8")
+
+    assert store.search("first query")
+    assert store.search("second query")
+    assert FakeSentenceTransformer.constructions == 1
+
+
+def test_saving_updated_documents_invalidates_stale_index(tmp_path):
+    store = KnowledgeStore(str(tmp_path))
+    store.documents_path.write_text("[]", encoding="utf-8")
+    store.index_path.write_bytes(b"old index")
+    store.metadata_path.write_text("[]", encoding="utf-8")
+
+    store.save_documents([{"title": "New", "url": "https://example.com", "text": "New property"}])
+
+    assert not store.index_path.exists()
+    assert not store.metadata_path.exists()
+    assert store._index_loaded is False
 
 
 def test_no_relevant_document_fallback(monkeypatch):

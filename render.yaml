@@ -8,15 +8,23 @@ services:
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL
-        value: qwen/qwen3-4b:free
+        value: nvidia/nemotron-3.5-lightning:free
+      - key: OPENROUTER_FALLBACK_MODELS
+        value: nvidia/nemotron-3-ultra-550b-a55b:free,google/gemma-4-31b-it:free
       - key: ADMIN_TOKEN
         generateValue: true
       - key: CORS_ORIGINS
-        sync: false
+        value: https://propertyiq.onrender.com,http://localhost:5173,http://localhost:3000
       - key: DATA_DIR
-        value: /tmp/propertyiq-data
+        value: /app/data
+      - key: APP_ENV
+        value: production
+    healthCheckPath: /health
   - type: web
     name: propertyiq
     runtime: docker
     dockerfilePath: ./frontend/Dockerfile
     dockerContext: ./frontend
+    envVars:
+      - key: API_BASE_URL
+        value: https://propertyiq-api.onrender.com/api

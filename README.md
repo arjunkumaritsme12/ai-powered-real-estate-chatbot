@@ -83,6 +83,7 @@ curl.exe -X POST "http://localhost:8000/api/knowledge/rebuild" -H "X-Admin-Token
 | OPENROUTER_TIMEOUT | Request timeout in seconds |
 | ADMIN_TOKEN | Optional protection for scrape/rebuild endpoints |
 | CORS_ORIGINS | Comma-separated allowed frontend origins |
+| API_BASE_URL | Optional frontend API base URL, including `/api`; leave empty to use the local reverse proxy |
 | DATA_DIR | Scraped JSON and FAISS storage directory |
 
 Never commit `.env` or expose the API key to frontend code.
@@ -109,9 +110,10 @@ npm run build
 
 1. Push the repository to GitHub.
 2. In Render, create a Blueprint from `render.yaml`.
-3. Set `OPENROUTER_API_KEY` and frontend `CORS_ORIGINS`.
-4. Add a managed persistent disk or external storage for `/app/data` in production if available. The free tier is ephemeral, so the scraped JSON and FAISS index may be lost after restarts. Re-run the scrape/rebuild CLI or endpoint after deployment.
-5. Configure the frontend API service URL to point to the backend when not using the supplied same-origin proxy.
+3. Set `OPENROUTER_API_KEY` on the backend service. The Blueprint configures the frontend's runtime API URL, backend CORS origin, and a currently available free model.
+4. The bundled Wasalt JSON and FAISS index are included in the backend image. The embedding model is downloaded during image build and loaded with the index during production startup. On Docker deployments with a fresh empty data volume, the entrypoint seeds that volume before starting the API.
+5. Add a managed persistent disk or external storage for `/app/data` in production if available. Render's free filesystem is ephemeral; the bundled seed remains in each image, but newly scraped data can be lost when an instance is replaced.
+6. If the Render service URLs differ from `propertyiq.onrender.com` and `propertyiq-api.onrender.com`, update `CORS_ORIGINS` and the frontend `API_BASE_URL` environment variable to match the actual service URLs, then redeploy both services.
 
 No live URL should be claimed until the deployed endpoint is tested successfully.
 
